@@ -1,0 +1,386 @@
+# 禁用插件库（当前计算集群未安装/不可用；若本地编译了自定义插件，可取消注释并填写插件路径）
+# set Additional shared libraries = ...
+
+# ========== 全局基础设置 ==========
+# 模型维度：2维平面应变模型。俯冲模拟常用2D简化，可大幅降低计算量，聚焦剖面方向的演化过程
+set Dimension                              = 2
+
+# 压力归一化：关闭。开启后会将压力场减去空间平均值，仅改变压力绝对值，不影响速度、温度计算；此处关闭以保留原始压力场
+set Pressure normalization                 = no
+
+# 时间单位切换：使用「年」代替「秒」。
+# 开启后所有时间类参数（总时长、时间步、输出间隔等）单位均为年，无需手动换算为秒，是地幔模拟的常用设置
+set Use years instead of seconds           = true
+
+# 模型总运行时长：2000万年（20×10⁶ 年），模拟安第斯平俯冲的演化周期
+set End time = 20e6
+
+# 结果输出目录：所有计算产物（可视化文件、检查点、后处理数据）都会保存到该路径
+set Output directory                       = /mnt/home/3160334l/aspect_project/andes_FS_output
+
+# 续算开关：false = 从头开始全新计算；设为 true 时，会从输出目录的最新检查点（checkpoint）继续运行
+set Resume computation                     = false
+
+
+# ========== 求解器与时间步长控制 ==========
+### SOLVER & TIME STEP
+# 非线性求解方案：单步对流 + 迭代Stokes求解
+# 含义：每个时间步内，先计算1次温度/组分的对流输运，再反复迭代求解Stokes方程（速度+压力）直到收敛
+# 是ASPECT中最经典、最稳定的求解方案，平衡计算精度与效率
+set Nonlinear solver scheme                = single Advection, iterated Stokes
+
+# 非线性求解收敛容差：1%。当Stokes方程残差下降到初始残差的1%以下时，认为当前时间步非线性迭代收敛
+set Nonlinear solver tolerance = 1.0e-2
+
+# 最大非线性迭代次数：500次。若迭代500次仍未收敛，强制结束当前步，进入下一时间步（避免卡死）
+set Max nonlinear iterations               = 500
+
+# CFL数：0.5。对流计算的稳定性判据，是控制时间步长的核心参数
+# 物理意义：一个时间步内，流体质点移动的距离不超过 0.5 个网格单元，保证数值计算不发生振荡
+# CFL值越大时间步越长，但超过1必然出现数值不稳定
+set CFL number = 0.5
+
+# 首个时间步的最大时长：1000年。模拟初始阶段流场尚未稳定，用极小时间步保证计算收敛
+set Maximum first time step = 1e3
+
+# 时间步最大相对增长率：20倍。每次时间步增长不能超过上一步的20倍，防止步长突增导致发散
+set Maximum relative increase in time step = 20
+
+# 全局最大时间步：5000年。无论CFL计算出多大步长，都不能超过该值，保证模拟时间分辨率
+set Maximum time step = 5e3
+
+# 线性求解器详细参数
+subsection Solver parameters
+  # Stokes方程（速度-压力耦合方程）的求解器参数
+  subsection Stokes solver parameters
+    # 线性求解容差：0.01%。每一次非线性迭代内部，线性求解的精度要求
+    set Linear solver tolerance            = 1.0e-4
+    # 廉价Stokes求解步数：200次。使用低精度预处理器快速迭代，加速整体求解过程
+    set Number of cheap Stokes solver steps = 200
+  end
+  # 温度方程求解容差：极高精度要求，保证温度场计算准确
+  set Temperature solver tolerance         = 1e-11
+  # 组分方程求解容差：极高精度要求，减少物质界面的数值扩散，保持界面清晰
+  set Composition solver tolerance         = 1e-12
+end
+
+
+# ========== 有限元离散化设置 ==========
+# 控制各物理量使用的多项式阶数：阶数越高精度越高，但计算量呈指数级增长
+subsection Discretization
+  # 温度场：二阶多项式单元。温度场变化平缓，二阶精度足够
+  set Temperature polynomial degree       = 2
+  # 组分场：四阶多项式单元。组分界面陡峭，高阶单元可显著降低数值扩散，保留物质分界面
+  set Composition polynomial degree       = 4
+  # Stokes速度场：二阶多项式。配合一阶压力单元，满足LBB稳定条件（标准Taylor-Hood单元配置）
+  set Stokes velocity polynomial degree   = 2
+end
+
+
+# ========== 几何模型设置 ==========
+subsection Geometry model
+  # 几何模型类型：矩形盒子（2D），是俯冲、地幔对流模拟最基础的几何框架
+  set Model name = box
+  subsection Box
+    # X方向初始粗网格重复数：5。初始最粗网格在水平方向分为5个单元，后续配合全局细化生成最终网格
+    set X repetitions = 5
+    # X方向模型总长度：3600公里（3600×10³ 米），对应安第斯俯冲带的横向模拟范围
+    set X extent = 3600e3
+    # Y方向模型总深度：800公里（800×10³ 米），从地表到上地幔底部
+    set Y extent = 800e3
+  end
+end
+
+
+# ========== 网格自适应细化 ==========
+# ASPECT核心功能：动态调整网格分辨率，在变形大、物理量梯度高的区域自动加密，兼顾精度与计算效率
+subsection Mesh refinement
+  # 初始全局细化等级：6级。初始粗网格全局均匀细化6次，生成基础计算网格
+  # 2D模型每细化1级，单元总数变为4倍；6级细化后网格具备基础分辨率
+  set Initial global refinement                = 6
+
+  # 初始自适应细化次数：0次。模拟开始前不进行自适应加密，直接用均匀网格启动
+  set Initial adaptive refinement = 0
+
+  # 网格重细化间隔：每3个时间步执行一次自适应网格调整
+  set Time steps between mesh refinement       = 3
+
+  # 细化比例：25%。每次调整时，将误差最大的25%单元进行加密
+  set Refinement fraction                      = 0.25
+  # 粗化比例：35%。每次调整时，将误差最小的35%单元进行粗化，控制总单元数稳定
+  set Coarsening fraction                      = 0.35
+
+  # 细化判据策略：综合4种指标判断单元是否需要细化
+  # 指标：粘度梯度、组分阈值、温度梯度、最小细化函数
+  set Strategy                                 = viscosity, composition threshold, temperature, minimum refinement function
+
+  # 各判据的权重系数：粘度1、组分1、温度1.5、最小细化函数1
+  # 温度权重更高，说明温度梯度是网格加密的主要依据
+  set Refinement criteria scaling factors      = 1, 1, 1.5, 1
+
+  # 多判据合并规则：取最大值。只要任意一个判据要求细化，该单元就会被细化
+  set Refinement criteria merge operation      = max
+
+  # 初始细化时是否运行后处理：关闭。初始网格生成阶段不输出可视化结果
+  set Run postprocessors on initial refinement = false
+
+  # 组分阈值细化参数：当组分场数值超过对应阈值时，强制加密该区域网格
+  # 3个阈值分别对应3个组分场，保证物质分界面处有足够分辨率
+  subsection Composition threshold
+    set Compositional field thresholds         = 0.25, 0.1, 0.1
+  end
+
+  # 最小细化函数：通过自定义函数，强制指定区域的最低细化等级
+  subsection Minimum refinement function
+    # 坐标系：笛卡尔直角坐标系
+    set Coordinate system = cartesian
+    # 函数变量：x为水平坐标，y为深度坐标
+    set Variable names = x, y
+    # 函数常量：ymax=模型总深度800km，lith=岩石圈厚度50km
+    set Function constants = ymax=800.0e3, lith=50.0e3
+    # 函数逻辑：距离地表小于50km的岩石圈区域，细化等级最低为8级
+    # 作用：表层岩石圈是俯冲、变形的核心区域，强制高分辨率保证计算精度
+    set Function expression = (((ymax-y) < lith) ? 8 : 0)
+  end
+end
+
+
+# ========== 网格变形与自由地表 ==========
+# 模拟真实地表变形：包括俯冲造成的地形起伏，以及长期地表侵蚀/沉积的平滑作用
+subsection Mesh deformation
+  # 启用变形的边界：顶部边界同时开启「自由表面」+「扩散」两种机制
+  set Mesh deformation boundary indicators = top: free surface & diffusion
+
+  # 自由表面核心参数
+  subsection Free surface
+    # 自由表面稳定系数θ：1。用于抑制自由表面的数值振荡，值越大越稳定，但会引入额外数值阻尼
+    set Free surface stabilization theta = 1
+    # 表面速度投影：仅法向速度改变地表形状，切向速度不影响地形
+    set Surface velocity projection = normal
+  end
+
+  # 地表扩散参数（模拟坡面侵蚀/沉积过程）
+  subsection Diffusion
+    # 坡面输运系数：1.0×10⁻⁸。控制地表地形的平滑速率，值越高地形越平缓，模拟长期侵蚀效果
+    set Hillslope transport coefficient = 1.0e-8
+  end
+end
+
+
+# ========== 初始温度场 ==========
+subsection Initial temperature model
+  # 初始温度模型类型：从ASCII文本文件读取。支持自定义任意复杂的初始温度分布
+  set Model name = ascii data
+  subsection Ascii data model
+    # 数据文件所在目录
+    set Data directory = /mnt/home/3160334l/aspect_project/inputs
+    # 温度数据文件名：文件内存储网格点坐标与对应温度值
+    set Data file name = tem_andes.txt
+  end
+end
+
+
+# ========== 组分场设置 ==========
+# 组分场用于标记不同岩石类型，每种组分对应不同的物理性质（密度、粘度、强度等）
+# 注意：ASPECT中 N 个组分场 → 对应 N+1 种物质，第0种为背景基质（地幔）
+subsection Compositional fields
+  set Number of fields = 3
+end
+# 本模型3个组分场，对应4种物质：
+# 0: 背景地幔（基质，无组分标记）
+# 1: 大洋地壳
+# 2: 大陆地壳
+# 3: 岩石圈根（克拉通根）
+
+# 初始组分场分布
+subsection Initial composition model
+  # 初始组分模型：从ASCII文件读取，自定义初始物质空间分布
+  set Model name = ascii data
+  subsection Ascii data model
+    set Data directory = /mnt/home/3160334l/aspect_project/inputs
+    set Data file name = com_andes.txt
+  end
+end
+
+
+# ========== 边界温度条件 ==========
+subsection Boundary temperature model
+  # 边界温度模型：盒子模型，为矩形的各边界设置温度条件
+  set List of model names = box
+  # 固定温度边界：顶部、底部边界为恒温边界
+  set Fixed temperature boundary indicators = top, bottom
+  subsection Box
+    # 底部边界温度：1603K（约1330℃），对应安第斯下方地幔底部温度
+    set Bottom temperature = 1603
+    # 顶部边界温度：273K（0℃），对应地表常温
+    set Top temperature = 273
+  end
+end
+
+
+# ========== 边界速度条件 ==========
+subsection Boundary velocity model
+    # 切向速度边界：左、右、底部边界为自由滑动边界
+    # 含义：边界上法向速度为0（流体不能穿过边界），切向速度不受约束
+    # 是俯冲模型的标准侧边界、底边界配置
+    set Tangential velocity boundary indicators = left, right, bottom
+end
+
+
+# ========== 材料模型（粘塑性流变）【核心部分】 ==========
+# 本模型使用粘塑性本构，是地幔动力学的标准流变模型
+# 变形机制 = 粘性流变（位错蠕变+扩散蠕变） + 塑性屈服（Drucker-Prager脆性准则）
+# Material model: visco-plastic, parameters adjusted from literature; friction angle kept as original value
+subsection Material model
+  # 多组分材料平均方式：几何平均。同一单元内包含多种组分时，用几何平均计算等效参数
+  set Material averaging = geometric average
+  # 材料模型名称：粘塑性模型
+  set Model name = visco plastic
+
+  subsection Visco Plastic
+    # 参考温度：1573K（1300℃）。流变参数的基准温度，温度偏离时通过阿伦尼乌斯公式修正粘度
+    set Reference temperature = 1573
+
+    # 绝热温度梯度对粘度的修正：9.24×10⁻⁹ K/Pa。考虑绝热压缩升温对粘度的影响
+    set Adiabat temperature gradient for viscosity = 9.24e-09
+
+    # 最小应变率：1×10⁻²⁰ s⁻¹。防止应变率为0时粘度计算出现无穷大，保证数值稳定
+    set Minimum strain rate   = 1.e-20
+
+    # 最小粘度：1×10¹⁸ Pa·s。粘度下限，防止软流层、剪切带粘度过低导致时间步过小、数值发散
+    # 对应软弱下地壳 / 俯冲通道的粘度
+    set Minimum viscosity     = 1e18
+
+    # 最大粘度：1×10²⁵ Pa·s。粘度上限，防止冷岩石圈、俯冲板块粘度过高导致求解困难
+    # 对应刚性岩石圈 / 俯冲板块的强度上限
+    set Maximum viscosity     = 1e25
+
+    # 热扩散系数：1×10⁻⁶ m²/s，岩石的典型热扩散率
+    set Thermal diffusivities = 1.e-6
+
+    # 定压热容：750 J/(kg·K)，四种物质热容取值相同
+    set Heat capacities       = 750., 750., 750., 750.
+
+    # 密度（kg/m³）：依次对应 背景地幔、洋壳、陆壳、岩石圈根
+    # Density settings: background mantle=3300, oceanic crust=3000, continental crust=2800, lithospheric keel=3340
+    # 洋壳比地幔轻 → 俯冲时易刮削形成增生楔；陆壳更轻 → 浮力大难以俯冲；岩石圈根更重 → 有下沉趋势
+    set Densities             = 3300, 3000, 2800, 3340
+
+    # 热膨胀系数（K⁻¹）：3×10⁻⁵，四种物质一致。温度升高体积膨胀，产生热浮力
+    set Thermal expansivities = 3e-5, 3e-5, 3e-5, 3e-5
+
+    # 粘性流动定律：复合流变。同时考虑位错蠕变和扩散蠕变，取等效粘度（两种机制并联）
+    set Viscous flow law = composite
+
+    # ---------- 位错蠕变参数（非线性流变，应力指数n>1） ----------
+    # 位错蠕变是高温、高应力下岩石的主要变形机制，粘度随应力增大而减小（非线性软化）
+    # 四组参数依次对应：背景地幔、洋壳、陆壳、岩石圈根
+
+    # 前置因子 A（Pa⁻ⁿ·s⁻¹）：阿伦尼乌斯公式的前项常数
+    set Prefactors for dislocation creep          = 8.499e-15, 1.2e-14, 1.5e-14, 1.0e-14
+    # 应力指数 n：控制非线性程度，n越大，粘度对应力越敏感
+    set Stress exponents for dislocation creep    = 3.5, 3.0, 3.0, 3.2
+    # 活化能 E（J/mol）：控制温度对粘度的影响，活化能越高，粘度对温度越敏感
+    set Activation energies for dislocation creep = 540.e3, 180.e3, 150.e3, 200.e3
+    # 活化体积 V（m³/mol）：控制压力对粘度的影响，深度越大压力越高，粘度越高
+    set Activation volumes for dislocation creep  = 12e-6, 12e-6, 12e-6, 12e-6
+
+    # ---------- 扩散蠕变参数（线性流变，应力指数n=1） ----------
+    # 扩散蠕变是低温、低应力下的变形机制，粘度与应力无关，与晶粒尺寸相关
+    # 本模型晶粒尺寸指数设为0，即不考虑晶粒大小对扩散蠕变的影响
+
+    # 前置因子
+    set Prefactors for diffusion creep            = 1.020e-10, 1.020e-10, 1.020e-10, 1.020e-10
+    # 应力指数：均为1，线性流变
+    set Stress exponents for diffusion creep      = 1, 1, 1, 1
+    # 晶粒尺寸指数：均为0，关闭晶粒尺寸影响
+    set Grain size exponents for diffusion creep  = 0, 0, 0, 0
+    # 活化能
+    set Activation energies for diffusion creep   = 300.e3, 300.e3, 300.e3, 300.e3
+    # 活化体积
+    set Activation volumes for diffusion creep    = 4e-6, 4e-6, 4e-6, 4e-6
+
+    # ---------- 塑性屈服参数（脆性变形） ----------
+    # 屈服机制：Drucker-Prager准则，模拟浅部岩石的脆性破裂、摩擦滑动
+    # 对应地壳浅部的脆性变形域，岩石强度随深度（围压）线性增加
+    set Yield mechanism         = drucker
+
+    # Internal friction angle kept unchanged (original value)
+    # 内摩擦角（度）：控制岩石强度随深度的增长速率，符合Byerlee摩擦定律
+    set Angles of internal friction = 30.96, 30.96, 30.96, 33.02
+
+    # 内聚力（Pa）：零围压下的岩石基础强度，对应地表处的岩石强度
+    # Cohesion values: background mantle=40MPa, ocean-crust interface=20MPa, continental crust=40MPa, keel=40MPa
+    # 洋壳界面内聚力仅20MPa，是易发生剪切变形的软弱层
+    set Cohesions               = 40.e6, 20.e6, 40.e6, 40.e6
+
+    # 最大屈服应力（Pa）：屈服强度的上限
+    # 防止深度过大时屈服应力无限增长，符合岩石高压下的强度封顶特性
+    set Maximum yield stress    = 0.5e9, 1.e9, 0.5e9, 0.5e9
+
+    # 粘度平均方案：几何平均
+    set Viscosity averaging scheme = geometric
+  end
+end
+
+
+# ========== 重力模型 ==========
+subsection Gravity model
+  # 重力类型：垂直向下的均匀重力场
+  set Model name = vertical
+  subsection Vertical
+    # 重力加速度：9.81 m/s²
+    set Magnitude = 9.81
+  end
+end
+
+
+# ========== 控制方程形式 ==========
+subsection Formulation
+  # 采用布辛涅斯克（Boussinesq）近似
+  # 核心假设：流体密度仅在浮力项中随温度变化，其余方程中密度视为常数
+  # 是地幔对流模拟的标准近似，大幅简化计算，且工程误差可接受
+  set Formulation = Boussinesq approximation
+end
+
+
+# ========== 后处理输出 ==========
+subsection Postprocess
+  # 启用的后处理器：可视化输出、地形数据、速度统计
+  set List of postprocessors = visualization, topography, velocity statistics
+
+  # 可视化输出设置
+  subsection Visualization
+    # 输出变量：材料属性（密度、粘度等）、应变率
+    set List of output variables = material properties, strain rate
+    # 输出格式：vtu（ParaView可直接读取的标准可视化格式）
+    set Output format                 = vtu
+    # 可视化输出间隔：每10万年输出一次结果
+    set Time between graphical output = 100e3
+    # 插值输出：开启。将有限元结果插值到均匀节点上，方便可视化查看
+    set Interpolate output = true
+  end
+
+  # 地形后处理
+  subsection Topography
+    # 输出到文本文件：开启。生成txt文件记录各时刻的地表地形剖面
+    set Output to file           = true
+    # 地形数据输出间隔：每10万年输出一次
+    set Time between text output = 100e3
+  end
+end
+
+
+# ========== 检查点（断点续算） ==========
+subsection Checkpointing
+  # 检查点保存间隔：每500个时间步保存一次
+  # 计算意外中断后，可通过 Resume computation=true 从最近的检查点继续计算
+  set Time between checkpoint = 500
+end
+
+
+# ========== 终止条件 ==========
+subsection Termination criteria
+  # 模拟结束时自动保存检查点，方便后续续算或拓展模拟
+  set Checkpoint on termination = true
+end

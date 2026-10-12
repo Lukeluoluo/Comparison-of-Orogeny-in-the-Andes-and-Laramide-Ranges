@@ -1,0 +1,159 @@
+# Disable plugin library (not available on this cluster)
+# set Additional shared libraries = ...
+set Dimension                              = 2
+set Pressure normalization                 = no
+set Use years instead of seconds           = true
+set End time = 20e6
+set Output directory                       = /mnt/home/3160334l/aspect_project/andes_FS_output
+set Resume computation                     = false
+### SOLVER & TIME STEP
+set Nonlinear solver scheme                = single Advection, iterated Stokes
+set Nonlinear solver tolerance = 1.0e-2
+set Max nonlinear iterations               = 500
+set CFL number = 0.5
+set Maximum first time step = 1e3
+set Maximum relative increase in time step = 20
+set Maximum time step = 5e3
+subsection Solver parameters
+  subsection Stokes solver parameters
+    set Linear solver tolerance            = 1.0e-4
+    set Number of cheap Stokes solver steps = 200
+  end
+  set Temperature solver tolerance         = 1e-11
+  set Composition solver tolerance         = 1e-12
+end
+subsection Discretization
+  set Temperature polynomial degree       = 2
+  set Composition polynomial degree       = 4
+  set Stokes velocity polynomial degree   = 2
+end
+subsection Geometry model
+#1
+  set Model name = box
+  subsection Box
+    set X repetitions = 5
+    set X extent = 3600e3
+    set Y extent = 800e3#1
+  end
+end
+subsection Mesh refinement
+  set Initial global refinement                = 6
+  set Initial adaptive refinement = 0
+  set Time steps between mesh refinement       = 3
+  set Refinement fraction                      = 0.25
+  set Coarsening fraction                      = 0.35
+  set Strategy                                 = viscosity, composition threshold, temperature, minimum refinement function
+  set Refinement criteria scaling factors      = 1, 1, 1.5, 1
+  set Refinement criteria merge operation      = max
+  set Run postprocessors on initial refinement = false
+  subsection Composition threshold
+    set Compositional field thresholds         = 0.25, 0.1, 0.1
+  end
+  subsection Minimum refinement function
+    set Coordinate system = cartesian
+    set Variable names = x, y
+    set Function constants = ymax=800.0e3, lith=50.0e3
+    set Function expression = (((ymax-y) < lith) ? 8 : 0)
+  end
+end
+subsection Mesh deformation
+  set Mesh deformation boundary indicators = top: free surface & diffusion
+  #set Additional tangential mesh velocity boundary indicators = left, right
+  subsection Free surface
+    set Free surface stabilization theta = 1
+    set Surface velocity projection = normal
+  end
+  subsection Diffusion
+    set Hillslope transport coefficient = 1.0e-8
+  end
+end
+subsection Initial temperature model
+  set Model name = ascii data
+  subsection Ascii data model
+    set Data directory = /mnt/home/3160334l/aspect_project/inputs
+    set Data file name = tem_andes.txt
+  end
+end
+subsection Compositional fields
+  set Number of fields = 3
+end
+subsection Initial composition model
+  set Model name = ascii data
+  subsection Ascii data model
+    set Data directory = /mnt/home/3160334l/aspect_project/inputs
+    set Data file name = com_andes.txt
+  end
+end
+subsection Boundary temperature model
+  set List of model names = box
+  set Fixed temperature boundary indicators = top, bottom
+  subsection Box
+    set Bottom temperature = 1603
+    set Top temperature = 273
+  end
+end
+subsection Boundary velocity model
+    set Tangential velocity boundary indicators = left, right, bottom
+end
+# Material model: visco-plastic, parameters adjusted from literature; friction angle kept as original value
+subsection Material model
+  set Material averaging = geometric average
+  set Model name = visco plastic
+  subsection Visco Plastic
+    set Reference temperature = 1573
+    set Adiabat temperature gradient for viscosity = 9.24e-09
+    set Minimum strain rate   = 1.e-20
+    set Minimum viscosity     = 1e18          # Weak lower crust / subduction channel
+    set Maximum viscosity     = 1e25          # Upper limit for strong lithosphere / slab
+    set Thermal diffusivities = 1.e-6
+    set Heat capacities       = 750., 750., 750., 750.
+    # Density settings: background mantle=3300, oceanic crust=3000, continental crust=2800, lithospheric keel=3340
+    set Densities             = 3300, 3000, 2800, 3340#1
+    set Thermal expansivities = 3e-5, 3e-5, 3e-5, 3e-5
+    set Viscous flow law = composite
+    set Prefactors for dislocation creep          = 8.499e-15, 1.2e-14, 1.5e-14, 1.0e-14
+    set Stress exponents for dislocation creep    = 3.5, 3.0, 3.0, 3.2
+    set Activation energies for dislocation creep = 540.e3, 180.e3, 150.e3, 200.e3
+    set Activation volumes for dislocation creep  = 12e-6, 12e-6, 12e-6, 12e-6
+    set Prefactors for diffusion creep            = 1.020e-10, 1.020e-10, 1.020e-10, 1.020e-10
+    set Stress exponents for diffusion creep      = 1, 1, 1, 1
+    set Grain size exponents for diffusion creep  = 0, 0, 0, 0
+    set Activation energies for diffusion creep   = 300.e3, 300.e3, 300.e3, 300.e3
+    set Activation volumes for diffusion creep    = 4e-6, 4e-6, 4e-6, 4e-6
+    set Yield mechanism         = drucker
+    # Internal friction angle kept unchanged (original value)
+    set Angles of internal friction = 30.96, 30.96, 30.96, 33.02
+    # Cohesion values: background mantle=40MPa, ocean-crust interface=20MPa, continental crust=40MPa, keel=40MPa
+    set Cohesions               = 40.e6, 20.e6, 40.e6, 40.e6
+    set Maximum yield stress    = 0.5e9, 1.e9, 0.5e9, 0.5e9
+    set Viscosity averaging scheme = geometric
+  end
+end
+subsection Gravity model
+  set Model name = vertical
+  subsection Vertical
+    set Magnitude = 9.81
+  end
+end
+subsection Formulation
+  set Formulation = Boussinesq approximation
+end
+subsection Postprocess
+  set List of postprocessors = visualization, topography, velocity statistics
+  subsection Visualization
+    set List of output variables = material properties, strain rate
+    set Output format                 = vtu
+    set Time between graphical output = 100e3
+    set Interpolate output = true
+  end
+  subsection Topography
+    set Output to file           = true
+    set Time between text output = 100e3
+  end
+end
+subsection Checkpointing
+  set Time between checkpoint = 500
+end
+subsection Termination criteria
+  set Checkpoint on termination = true
+end
